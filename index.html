@@ -1,0 +1,1431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Keep the published site out of search engines (analyst request 2026-10-21), as the AI ensemble
+     viewer does: don't index the page, follow its links, keep a cached copy, show a snippet or index
+     its images. GitHub Pages can't send an X-Robots-Tag header, and a project site's robots.txt
+     isn't at the domain root where crawlers look, so this tag is what does it. Delete it to allow indexing. -->
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<title>CANSAC WRF &middot; California Fire Weather Viewer</title>
+<!-- California Fire Weather Viewer -- copied into each run folder as index.html by
+     scripts/fire_wx_viewer.py. Same page anatomy as the Rx Window Forecast's Custom Rx viewer
+     (scripts/templates/rx_custom_viewer.html): a 7.5 x 7.9 in canvas page with black header/footer
+     bars, vertical color bar and subtitle, a side panel with day pills, scrubber and playback deck,
+     and a click-a-cell hourly table. fwx_data.js lists the frames; each frame (frames/f_HHH.js) holds
+     zlib'd, delta-coded uint8 planes (wind mph, gust mph, RH %, direction / 10 deg) for the grid's
+     in-domain cells, loaded through <script src> so the page works double-clicked from disk. -->
+<style>
+  :root {
+    --bg: #eef1f0; --surface: #ffffff; --surface-2: #e2e6e4; --surface-3: #d5dad7;
+    --border: #c7cdc9; --text: #1b201e; --text-dim: #5c655f;
+    --accent: #d9622a; --accent-ink: #ffffff; --accent-soft: #f4dccb; --focus: #1b6de0;
+    --bad: #c62f2f; --ok: #2e7d4f;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+      --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+      --accent: #ff8a4c; --accent-ink: #1b1006; --accent-soft: #3a2416; --focus: #6fa8ff;
+      --bad: #ff6b68; --ok: #6fd39a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161a; --surface: #191f24; --surface-2: #212830; --surface-3: #2a323b;
+    --border: #333d47; --text: #e8ecef; --text-dim: #8b98a3;
+    --accent: #ff8a4c; --accent-ink: #1b1006; --accent-soft: #3a2416; --focus: #6fa8ff;
+    --bad: #ff6b68; --ok: #6fd39a;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace; }
+
+  .console { max-width: 1180px; margin: 0 auto; padding: 10px; display: flex; align-items: flex-start; gap: 14px; }
+  .mapCol { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .sideCol {
+    flex: 0 0 300px; display: flex; flex-direction: column; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  }
+  .group { display: flex; flex-direction: column; gap: 5px; }
+  .groupLabel { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .groupHead { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand-mark {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    background: var(--accent); color: var(--accent-ink); padding: 3px 6px; border-radius: 3px; line-height: 1;
+  }
+  .brand h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
+  .readout { display: flex; flex-direction: column; gap: 3px; margin: 0; }
+  .readout dt { font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .readout dd { margin: 1px 0 0; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; line-height: 1.3; }
+
+  select {
+    font: inherit; font-size: 12.5px; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; min-width: 0;
+  }
+  select:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+
+  .dayRow { display: flex; gap: 5px; flex-wrap: wrap; }
+  .pill {
+    appearance: none; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    font: inherit; font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 999px; cursor: pointer;
+  }
+  .pill:hover { border-color: var(--text-dim); }
+  .pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .pill[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .pill .src { font-weight: 500; opacity: 0.7; font-size: 9.5px; margin-left: 3px; }
+
+  .viewport {
+    position: relative; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+    aspect-ratio: 7.5 / 7.9; overflow: hidden;
+  }
+  .viewport canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #overlay { cursor: crosshair; }
+  .cursorLine { font-size: 11.5px; color: var(--text-dim); min-height: 1.3em; margin: -4px 2px 0; }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 999px;
+    background: var(--surface-3); outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--accent);
+    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); cursor: pointer; margin-top: -5.5px;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; background: var(--accent);
+    border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); cursor: pointer;
+  }
+  input[type="range"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  .scrubLabels { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); }
+
+  .transport { display: flex; flex-wrap: wrap; gap: 4px; }
+  .btn {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+    font: inherit; font-size: 12.5px; font-weight: 600; min-width: 34px; height: 28px; border-radius: 4px;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 8px;
+    text-decoration: none;
+  }
+  .btn:hover { background: var(--surface-3); }
+  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-play { min-width: 40px; font-size: 14px; }
+  .btn-play[data-playing="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn-toggle { font-size: 10.5px; letter-spacing: 0.05em; font-weight: 700; flex: 1 1 auto; }
+  .btn-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  #fieldButtons { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .btn-field.btn-precip { grid-column: 1 / -1; }
+  #viUnits .btn-toggle { flex: 1 1 0; padding: 0 3px; font-size: 9.5px; letter-spacing: 0.02em; }
+  #precipModes .btn-toggle { flex: 1 1 0; padding: 0 3px; font-size: 9.5px; letter-spacing: 0.02em; }
+  #legendButtons .btn-toggle { flex: 1 1 0; }
+  #arrowButtons .btn-toggle { flex: 1 1 0; padding: 0 3px; font-size: 9.5px; letter-spacing: 0.02em; }
+  .btn-field { flex: 1 1 0; font-size: 11px; padding: 0 4px; letter-spacing: 0.05em; font-weight: 700; height: 32px; }
+  .btn-field[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn-wide { flex: 1 1 auto; font-size: 11px; letter-spacing: 0.04em; }
+  .llRow { display: flex; gap: 4px; }
+  .llRow input {
+    flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
+  }
+  .llRow input:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+  .llRow input[aria-invalid="true"] { border-color: var(--bad); }
+  .speed { display: flex; align-items: center; gap: 8px; }
+  .speed label { font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
+  .speed select { flex: 0 0 auto; }
+  .hint { margin: 0; font-size: 10.5px; line-height: 1.4; color: var(--text-dim); }
+  .hint a { color: inherit; }
+  .metaBlock { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--border); padding-top: 6px; }
+  .toast { font-size: 11px; color: var(--ok); min-height: 1.2em; margin: 0; }
+
+  .detail { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .detailHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .detailTitle { font-size: 12.5px; font-weight: 700; }
+  .detailSub { font-size: 11px; color: var(--text-dim); }
+  .tableWrap { overflow-x: auto; margin-top: 6px; }
+  table.hourly { border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+  table.hourly th, table.hourly td { padding: 2px 5px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  table.hourly th[scope="row"] { text-align: left; font-weight: 600; color: var(--text-dim); position: sticky; left: 0; background: var(--surface); }
+  table.hourly thead th { color: var(--text-dim); font-weight: 600; cursor: pointer; }
+  table.hourly td.sw { color: #111; }
+  table.hourly td.sw.dark { color: #fff; }
+  table.hourly .cur { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .loadstate { font-size: 13px; color: var(--text-dim); text-align: center; padding: 40px 24px; }
+
+  .citeWrap { max-width: 1180px; margin: 0 auto; padding: 0 10px 16px; box-sizing: border-box; }
+  details.citeBar {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+  }
+  details.citeBar summary {
+    font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--text); list-style: revert;
+  }
+  details.citeBar summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .citeBody { font-size: 12px; line-height: 1.6; color: var(--text-dim); margin-top: 10px; }
+  .citeBody p { margin: 0 0 10px; }
+  .citeBody p:last-child { margin-bottom: 0; }
+  .citeBody strong { color: var(--text); }
+  .citeBody a { color: var(--accent); overflow-wrap: anywhere; }
+  .citeList { margin: 0 0 10px; padding-left: 18px; }
+  .citeList li { margin-bottom: 4px; }
+  @media (max-width: 760px) {
+    .console { flex-direction: column; }
+    .sideCol { flex: 1 1 auto; width: 100%; }
+    .mapCol { width: 100%; }
+  }
+</style>
+</head>
+<body>
+  <div class="console" id="console" hidden>
+    <div class="mapCol">
+      <div class="viewport" id="viewport">
+        <canvas id="mapCanvas" aria-label="Fire weather map"></canvas>
+        <canvas id="overlay" aria-hidden="true"></canvas>
+      </div>
+      <p class="cursorLine mono" id="cursorLine">Click the map for that point's hour-by-hour values.</p>
+      <section class="detail" id="detail" hidden>
+        <div class="detailHead">
+          <span class="detailTitle" id="detailTitle"></span>
+          <span class="detailSub" id="detailSub"></span>
+        </div>
+        <div class="tableWrap"><table class="hourly" id="detailTable"></table></div>
+      </section>
+    </div>
+
+    <aside class="sideCol">
+      <div class="brand">
+        <span class="brand-mark">CANSAC</span>
+        <h1>California Fire Weather Viewer</h1>
+      </div>
+      <dl class="readout">
+        <div><dt>Model run</dt><dd id="issuedReadout">&mdash;</dd></div>
+        <div><dt>Frame</dt><dd id="frameReadout">&mdash;</dd></div>
+        <div><dt>Source</dt><dd id="sourceReadout">&mdash;</dd></div>
+      </dl>
+
+      <div class="group">
+        <span class="groupLabel">Field</span>
+        <div class="transport" role="group" aria-label="Field" id="fieldButtons">
+          <button class="btn btn-field" type="button" data-field="wind" title="10-m wind speed (1)">WIND</button>
+          <button class="btn btn-field" type="button" data-field="gust" title="Surface wind gust (2)">GUST</button>
+          <button class="btn btn-field" type="button" data-field="rh" title="2-m relative humidity (3)">RH</button>
+          <button class="btn btn-field" type="button" data-field="mixht" title="Mixing height, ft above ground (4)">MIX HT</button>
+          <button class="btn btn-field" type="button" data-field="trans" title="Transport wind speed (5)">TRANSPORT</button>
+          <button class="btn btn-field" type="button" data-field="vi" title="Ventilation index = transport wind (kt) x mixing height (ft), NWCG smoke-condition ratings (6)">VENT INDEX</button>
+          <button class="btn btn-field btn-precip" type="button" data-field="precip" title="Precipitation (7)">PRECIP</button>
+        </div>
+        <div class="transport" role="group" aria-label="Ventilation index units" id="viUnits" hidden>
+          <button class="btn btn-toggle" type="button" data-vi="kt" title="Transport wind (knots) x mixing height (ft), the NWCG / NWS unit">KNOT-FT</button>
+          <button class="btn btn-toggle" type="button" data-vi="mph" title="Mixing height (ft) x transport wind (mph); category breaks converted">MPH-FT</button>
+        </div>
+        <div class="transport" role="group" aria-label="Precipitation period" id="precipModes" hidden>
+          <button class="btn btn-toggle" type="button" data-field="precip" title="Precipitation in the hour ending at the valid time">1 HOUR</button>
+          <button class="btn btn-toggle" type="button" data-field="pday" title="Total for the local calendar day, midnight to midnight">DAY TOTAL</button>
+          <button class="btn btn-toggle" type="button" data-field="ptot" title="Total since the model run started, through the valid time">RUN TOTAL</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label class="groupLabel" for="llInput">Point lookup</label>
+        <div class="llRow">
+          <input type="text" id="llInput" class="mono" placeholder="lat, lon  e.g. 39.75, -121.60" inputmode="decimal"
+                 aria-label="Latitude and longitude, decimal degrees" autocomplete="off" spellcheck="false">
+          <button class="btn" id="btnLL" type="button" title="Show this point's hourly table">GO</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <label class="groupLabel" for="areaSelect">Map area</label>
+        <select id="areaSelect" aria-label="Map area"></select>
+      </div>
+
+      <div class="group">
+        <span class="groupLabel">Forecast Day</span>
+        <div class="dayRow" id="dayPills" role="tablist" aria-label="Forecast day"></div>
+        <input type="range" id="scrubber" min="0" max="0" value="0" step="1" aria-label="Forecast hour">
+        <div class="scrubLabels mono"><span id="scrubFirst"></span><span id="scrubLast"></span></div>
+      </div>
+
+      <div class="group">
+        <span class="groupLabel">Playback</span>
+        <div class="transport" role="group" aria-label="Playback">
+          <button class="btn" id="btnFirst" title="First hour (Home)">|&laquo;</button>
+          <button class="btn" id="btnPrev" title="Step back (Left arrow)">&laquo;</button>
+          <button class="btn btn-play" id="btnPlay" title="Play / pause (Space)">&#9654;</button>
+          <button class="btn" id="btnNext" title="Step forward (Right arrow)">&raquo;</button>
+          <button class="btn" id="btnLast" title="Last hour (End)">&raquo;|</button>
+          <button class="btn btn-toggle" id="btnReverse" title="Reverse playback direction" aria-pressed="false">REVERSE</button>
+        </div>
+        <div class="speed">
+          <label for="speedSlider">Speed</label>
+          <input type="range" id="speedSlider" min="1" max="10" value="6" aria-label="Animation speed">
+          <label for="stepSelect">Step</label>
+          <select id="stepSelect" aria-label="Step size">
+            <option value="1">1 h</option>
+            <option value="3">3 h</option>
+            <option value="24">24 h</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="groupLabel">Color bar</span>
+        <div class="transport" role="group" aria-label="Color bar range" id="legendButtons">
+          <button class="btn btn-toggle" type="button" data-legend="fit" title="Only the bands present in the map view, like CANSAC's own maps">FIT TO VIEW</button>
+          <button class="btn btn-toggle" type="button" data-legend="full" title="The whole scale, the same every hour">FULL SCALE</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="groupLabel">Wind arrows</span>
+        <div class="transport" role="group" aria-label="Wind arrows" id="arrowButtons">
+          <button class="btn btn-toggle" type="button" data-arrows="off" title="No arrows (A cycles)">OFF</button>
+          <button class="btn btn-toggle" type="button" data-arrows="wind" title="10-m wind direction, length by 10-m speed">10 M</button>
+          <button class="btn btn-toggle" type="button" data-arrows="gust" title="10-m wind direction, length by gust speed">GUSTS</button>
+          <button class="btn btn-toggle" type="button" data-arrows="trans" title="Transport wind direction and speed">TRANSPORT</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="groupLabel">Export</span>
+        <div class="transport">
+          <button class="btn btn-wide" id="btnPng" type="button" title="Download this frame as PNG">PNG</button>
+          <button class="btn btn-wide" id="btnCsv" type="button" title="Every hour at the selected point" disabled>POINT CSV</button>
+          <button class="btn btn-wide" id="btnShare" type="button" title="Copy a link to this field, hour, area and point">COPY LINK</button>
+        </div>
+        <p class="toast" id="toast" role="status"></p>
+      </div>
+
+      <div class="metaBlock">
+        <p class="hint mono" id="statsText"></p>
+        <p class="hint mono" id="loadText"></p>
+        <p class="hint">Arrows point the way the wind blows, longer for faster wind: black = 10-m wind,
+          dark purple = gusts (10-m direction), blue = transport wind; a dot = under 1 mph. Gray = no forecast data. Wind is the
+          model's 10-m wind (roughly 15&ndash;20% above 20-ft wind); gust is WRF's diagnosed surface gust;
+          RH is at 2&nbsp;m.</p>
+        <p class="hint">Mixing height is WRF's boundary-layer height (ft above ground) and transport wind
+          its mean wind through that layer. Ventilation index = transport wind (kt) &times; mixing height
+          (ft), in knot-feet. Smoke condition (NWCG PMS 425), knot-feet: <b>Poor</b> 0&ndash;28,999 &middot;
+          <b>Marginal</b> 29,000&ndash;37,999 &middot; <b>Fair</b> 38,000&ndash;49,999 &middot; <b>Good</b>
+          50,000&ndash;94,999 &middot; <b>Excellent</b> 95,000+ (&ldquo;but burn with caution&rdquo;: good
+          dispersal can also mean conditions for large fire growth). Some states use other breaks.
+          MPH-FT shows the same index with the wind in mph (&times;1.15; the breaks become 33k, 44k, 58k
+          and 109k). It is the index of
+          Worsnop et al. 2026 (their Eq.&nbsp;1, in m&sup2;/s; 1 m&sup2;/s = 6.38 kt-ft); the bars beside the
+          VI color bar are their burn days' daylight-maximum VI for the month (P pile, B broadcast).</p>
+        <p class="hint">Precipitation is the model's, in inches, hour-ending (the amount that fell in the
+          hour up to the valid time). Day total = local midnight to midnight; the run's first and last
+          days are partial. Run total = since the run started, with the 3&nbsp;km run's amounts added
+          after hour 72.</p>
+        <p class="hint" id="sourceText"></p>
+        <p class="hint">Space play &middot; &larr;/&rarr; step &middot; &uarr;/&darr; day &middot; Home/End
+          &middot; 1&ndash;7 field &middot; A arrows &middot; <a href="#citations" id="citeLink">Data sources &darr;</a></p>
+      </div>
+    </aside>
+  </div>
+
+  <div class="citeWrap">
+    <details class="citeBar" id="citations">
+      <summary>Citations and data sources</summary>
+      <div class="citeBody">
+        <ul class="citeList">
+          <li><strong>Forecast weather:</strong> <a href="https://cansac.dri.edu/" target="_blank" rel="noopener">CANSAC</a>
+            (California and Nevada Smoke and Air Committee) real-time WRF, run by the Desert Research
+            Institute: the 1&nbsp;km run for the first 72 hours and the 3&nbsp;km Domain&nbsp;2 run after
+            that, from CANSAC's GRIB2 files. 10-m U/V wind, WRF surface gust and 2-m relative humidity,
+            regridded to a regular latitude/longitude grid. Where the 1&nbsp;km grid ends (north of about
+            42.3&deg;N and east of about 113.4&deg;W) the same hour of the 3&nbsp;km run fills in.</li>
+          <li><strong>Mixing height, transport wind, ventilation index:</strong> WRF planetary boundary layer
+            height (HPBL) and PBL-mean U/V from the same CANSAC files. Ventilation index = mixing height &times;
+            transport wind speed (Hardy et al. 2001, as Eq.&nbsp;1 of Worsnop et al. 2026), shown in knot-feet
+            (or mph-ft), computed on the model grid before regridding.</li>
+          <li><strong>Smoke-condition ratings:</strong> NWCG, <em>NWCG Guide to Fire Weather Forecasts</em>
+            (PMS 425), <a href="https://www.nwcg.gov/publications/pms425/2-fire-weather-forecast-variables"
+            target="_blank" rel="noopener">Fire Weather Forecast Variables</a>, Table 2. Colors are this
+            viewer's: one hue per rating, shaded within the wider ratings.</li>
+          <li>Worsnop, R.P., A. Hoell, B.J. Hatchett, T.B. Chapman, M.L. Breeden, Z. Tolby, K.C. Short and
+            M. Hobbins. 2026. Characterizing windows of opportunity for prescribed pile and broadcast burning
+            in Northern California. <em>Fire Ecology</em> 22:51.
+            <a href="https://doi.org/10.1186/s42408-026-00492-6" target="_blank" rel="noopener">https://doi.org/10.1186/s42408-026-00492-6</a>
+            &mdash; burn-day ventilation index percentiles by month (ONCC, 2011&ndash;2024).</li>
+          <li>Hardy, C.C., R.D. Ottmar, J.L. Peterson, J.E. Core and P. Seamon. 2001. <em>Smoke management
+            guide for prescribed and wildland fire</em>, 2001 edition. NWCG PMS 420-2.</li>
+          <li><strong>Color scales:</strong> CANSAC's own wind and RH palettes. Wind, gust and transport wind
+            share one scale, 2-mph bands to 40&nbsp;mph, then wider bands to 100+. Mixing height and VI run
+            dark red (poor dispersal) to blue (good).</li>
+          <li><strong>Boundaries and cities:</strong>
+            <a href="https://www.naturalearthdata.com" target="_blank" rel="noopener">Natural Earth</a> (public
+            domain). Map areas: NIFC GACC boundaries.</li>
+        </ul>
+        <p>Experimental planning aid: raw model output, not an official forecast. Use the NWS fire weather
+          forecasts and spot forecasts for operations.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="loadstate" id="loadState">Loading forecast data&hellip;</div>
+
+<script src="fwx_boundaries.js"></script>
+<script src="fwx_data.js"></script>
+<script>
+(function () {
+  "use strict";
+  var citeLink = document.getElementById("citeLink");
+  if (citeLink) citeLink.addEventListener("click", function () { document.getElementById("citations").open = true; });
+
+  var D = window.__FWX_DATA__, B = window.__FWX_BOUNDARIES__;
+  var $ = function (id) { return document.getElementById(id); };
+  if (!D || !B) {
+    $("loadState").textContent = "Could not load fwx_data.js / fwx_boundaries.js. Open index.html from the " +
+      "run folder written by fire_wx_viewer.py.";
+    return;
+  }
+  if (typeof DecompressionStream === "undefined") {
+    $("loadState").textContent = "This browser is too old for this page (no DecompressionStream). " +
+      "Use a current Chrome, Edge, Firefox or Safari.";
+    return;
+  }
+
+  // ------------------------------------------------------------------ page geometry (rx_custom_viewer.html)
+  var PAGE_W = 7.5, PAGE_H = 7.9, HEADER = 0.42, FOOTER = 0.20, BAR_PAD = 0.06;
+  var MAP_MARGIN = 0.1, MAP_LEFT = 0.15, CBAR_GAP = 0.3, CBAR_W = 0.26, CBAR_LABEL = 0.55,
+      CBAR_RIGHT = 0.1, CBAR_VINSET = 0.06, SUBTITLE = 0.22;
+  var ARROW_SPACING_IN = 0.17, ARROW_MAX_IN = 0.19;    // arrow spacing and longest arrow, page inches
+  var FIELDS = ["wind", "gust", "rh", "mixht", "trans", "vi", "precip", "pday", "ptot"];
+  var PRECIP_FIELDS = ["precip", "pday", "ptot"];
+  function isPrecip(f) { return PRECIP_FIELDS.indexOf(f) >= 0; }
+  // Arrow overlays: which speed sets the length, which direction plane the bearing, the speed at
+  // full length, and the arrow color.
+  var ARROWS = {
+    wind: { speed: "wind", dir: "dir", full: 40, color: "#111111", label: "10-m wind" },
+    gust: { speed: "gust", dir: "dir", full: 60, color: "#2a0a4a", label: "gusts (10-m direction)" },
+    trans: { speed: "trans", dir: "tdir", full: 40, color: "#0b3d91", label: "transport wind" }
+  };
+  var ARROW_MODES = ["off", "wind", "gust", "trans"];
+  var PRELOAD_AHEAD = 24;                                // frames fetched ahead of the current one
+  var MISSING = D.missing, FR = D.frames, NF = FR.length;
+  var MP = D.map || {};
+
+  // ------------------------------------------------------------------ binary helpers
+  function b64bytes(b64) {
+    var bin = atob(b64), n = bin.length, out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function inflate(bytes) {
+    var ds = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+    return new Response(ds).arrayBuffer().then(function (buf) { return new Uint8Array(buf); });
+  }
+
+  // ------------------------------------------------------------------ grids (cell masks)
+  // cellOf[j*nx + i] = index of that grid cell among the in-domain cells (row-major, south row first,
+  // the order fire_wx_viewer.py stores the planes in), or -1 outside the domain.
+  var GRIDS = {};
+  function decodeGrids() {
+    return Promise.all(Object.keys(D.grids).map(function (key) {
+      var g = D.grids[key];
+      return inflate(b64bytes(g.mask)).then(function (bits) {
+        var N = g.ny * g.nx, cellOf = new Int32Array(N).fill(-1), c = 0;
+        for (var k = 0; k < N; k++) if ((bits[k >> 3] >> (k & 7)) & 1) cellOf[k] = c++;
+        GRIDS[key] = { key: key, nx: g.nx, ny: g.ny, lon0: g.lon0, lat0: g.lat0, cell: g.cell, n: g.n, cellOf: cellOf };
+      });
+    }));
+  }
+  function cellNear(g, lat, lon) {
+    var i = Math.round((lon - g.lon0) / g.cell), j = Math.round((lat - g.lat0) / g.cell);
+    if (i < 0 || i >= g.nx || j < 0 || j >= g.ny) return -1;
+    return g.cellOf[j * g.nx + i];
+  }
+
+  // ------------------------------------------------------------------ frames: load (script tag), decode, cache
+  // Each hour is one file per plane group (D.planes[].group: "sfc" = wind, gust, RH, 10-m direction;
+  // "pbl" = mixing height, transport wind, VI, transport direction). Only the groups the current
+  // view needs are fetched. A frame handed to the drawing code is {i, g, parts: {group: part}, stats}.
+  var PLANE = {}, GROUPS = [];
+  D.planes.forEach(function (p) { PLANE[p.name] = p; if (GROUPS.indexOf(p.group) < 0) GROUPS.push(p.group); });
+  var raw = {}, loading = {}, parts = {}, lru = [], PARTS_MAX = 64;
+  window.__FWX_FRAMES__ = window.__FWX_FRAMES__ || {};
+  function pkey(i, grp) { return grp + ":" + i; }
+  function loadRaw(i, grp) {
+    var k = pkey(i, grp);
+    if (raw[k]) return Promise.resolve(raw[k]);
+    if (loading[k]) return loading[k];
+    loading[k] = new Promise(function (resolve, reject) {
+      var el = document.createElement("script");
+      el.src = FR[i].files[grp];
+      el.onload = function () {
+        var key = grp + FR[i].hour, b64 = window.__FWX_FRAMES__[key];
+        delete window.__FWX_FRAMES__[key];
+        el.remove();
+        if (!b64) { reject(new Error("frame " + key + " empty")); return; }
+        raw[k] = b64bytes(b64);
+        updateLoadText();
+        resolve(raw[k]);
+      };
+      el.onerror = function () { loading[k] = null; el.remove(); reject(new Error("could not load " + FR[i].files[grp])); };
+      document.head.appendChild(el);
+    });
+    return loading[k];
+  }
+  function getPart(i, grp) {
+    var k = pkey(i, grp);
+    if (parts[k]) { touch(k); return Promise.resolve(parts[k]); }
+    return loadRaw(i, grp).then(inflate).then(function (buf) {
+      // The group's planes in D.planes order: "frame" planes over the frame grid's cells, "coarse"
+      // planes (directions) over the coarse grid's. off[name] = start of that plane in buf.
+      var g = GRIDS[FR[i].grid], off = {}, pos = 0, st = {};
+      D.planes.forEach(function (p) {
+        if (p.group !== grp) return;
+        var len = p.grid === "coarse" ? GRIDS.coarse.n : g.n, acc = 0;
+        off[p.name] = pos;
+        for (var q = pos; q < pos + len; q++) { acc = (acc + buf[q]) & 255; buf[q] = acc; }  // undo delta coding
+        pos += len;
+        if (p.grid === "coarse") return;
+        var s = { min: 255, max: -1, minAt: -1, maxAt: -1 };
+        for (var c = 0; c < g.n; c++) {
+          var v = buf[off[p.name] + c];
+          if (v === MISSING) continue;
+          if (v > s.max) { s.max = v; s.maxAt = c; }
+          if (v < s.min) { s.min = v; s.minAt = c; }
+        }
+        st[p.name] = s;
+      });
+      var part = { v: buf, off: off, stats: st };
+      parts[k] = part; touch(k);
+      while (lru.length > PARTS_MAX) {
+        var old = lru.shift();
+        if (Number(old.split(":")[1]) !== state.frame) delete parts[old]; else lru.push(old);
+      }
+      return part;
+    });
+  }
+  function touch(k) { var n = lru.indexOf(k); if (n >= 0) lru.splice(n, 1); lru.push(k); }
+  // Groups the map needs: the field's, plus the arrow overlay's speed and direction planes.
+  function viewGroups() {
+    var out = [PLANE[state.field].group], A = ARROWS[state.arrows];
+    if (A) [A.speed, A.dir].forEach(function (n) { if (out.indexOf(PLANE[n].group) < 0) out.push(PLANE[n].group); });
+    return out;
+  }
+  function getFrame(i, groups) {
+    groups = groups || viewGroups();
+    return Promise.all(groups.map(function (grp) { return getPart(i, grp); })).then(function (ps) {
+      var f = { i: i, g: GRIDS[FR[i].grid], parts: {}, stats: {} };
+      groups.forEach(function (grp, k) { f.parts[grp] = ps[k]; Object.assign(f.stats, ps[k].stats); });
+      return f;
+    });
+  }
+  var STEP = {};
+  D.planes.forEach(function (p) { STEP[p.name] = p.step; });
+  // Precipitation code -> inches (fire_wx_viewer.pencode's table): 0.01 in steps to 1 in, then
+  // 0.05 to 5, 0.25 to 20, 1 in above.
+  var PDEC = new Float64Array(255);
+  for (var pc = 0; pc < 255; pc++) {
+    var seg = D.pcode_steps.filter(function (t) { return t[2] <= pc; }).pop();
+    PDEC[pc] = Math.round((seg[0] + (pc - seg[2]) * seg[1]) * 100) / 100;
+  }
+  // Stored value (possibly fractional, from bilinear blending) -> display units.
+  function toDisplay(name, stored) {
+    if (STEP[name] !== "pcode") return stored * STEP[name];
+    var k = Math.min(253, Math.floor(stored)), fr = stored - k;
+    return PDEC[k] + fr * (PDEC[k + 1] - PDEC[k]);
+  }
+  // A plane's value in display units (mph, %, ft, kt-ft, in, deg FROM) at cell c of its own grid
+  // (the frame grid, or the coarse grid for directions); null if missing, outside or not loaded.
+  function value(f, name, c) {
+    var pt = f.parts[PLANE[name].group];
+    if (!pt || c < 0) return null;
+    var v = pt.v[pt.off[name] + c];
+    return v === MISSING ? null : toDisplay(name, v);
+  }
+  // Every plane at a point.
+  function pointVals(f, lat, lon) {
+    var c = cellNear(f.g, lat, lon), cc = cellNear(GRIDS.coarse, lat, lon), out = {};
+    D.planes.forEach(function (p) { out[p.name] = value(f, p.name, p.grid === "coarse" ? cc : c); });
+    return out;
+  }
+  function fmtVal(field, v) {
+    if (v == null) return "—";
+    if (isPrecip(field)) return v === 0 ? "0" : v.toFixed(2);
+    // VI is stored in 1,000 kt-ft steps, rounded down, up to 254,000 (the top step means "that or
+    // more"); mph-ft is rounded to 100s rather than imply more precision.
+    if (field === "vi") return (Math.round(viShown(v) / 100) * 100).toLocaleString("en-US") + (v >= 254 * STEP.vi ? "+" : "");
+    return field === "mixht" ? Math.round(v).toLocaleString("en-US") : String(v);
+  }
+  // Ventilation index: stored and categorized in kt-ft (NWS); shown in kt-ft or mph-ft (state.viUnit).
+  var VI_SC = D.scales.vi;
+  function viShown(v) { return state.viUnit === "mph" ? v * VI_SC.mph_per_kt : v; }
+  function viUnitText() { return state.viUnit === "mph" ? "mph-ft" : "kt-ft"; }
+  // NWCG rating index of a kt-ft value, and of each color band (by its lower bound).
+  function viCatIndex(v) {
+    var k = 0;
+    while (k + 1 < VI_SC.categories.length && VI_SC.categories[k + 1].lo <= v) k++;
+    return k;
+  }
+  function viCategory(v) { return VI_SC.categories[viCatIndex(v)].name; }
+  var VI_BAND_CAT = [0].concat(VI_SC.edges).map(viCatIndex);
+
+  // Background preload: the next PRELOAD_AHEAD frames in the playback direction (the groups the
+  // view needs), three at a time, so playback stays smooth without pulling the whole week up front.
+  var preload = { active: 0 };
+  function nLoaded() {
+    var n = 0, gs = viewGroups();
+    for (var i = 0; i < NF; i++) if (gs.every(function (grp) { return raw[pkey(i, grp)]; })) n++;
+    return n;
+  }
+  function updateLoadText() {
+    var n = nLoaded();
+    $("loadText").textContent = n < NF ? n + " of " + NF + " hours downloaded for this view (fetched as you go)" :
+      "All " + NF + " hours downloaded for this view";
+  }
+  function pumpPreload() {
+    var gs = viewGroups();
+    while (preload.active < 3) {
+      var next = null;
+      for (var k = 0; k <= PRELOAD_AHEAD && !next; k++) {
+        var j = (((state.frame + (state.reverse ? -k : k) * state.step) % NF) + NF) % NF;
+        for (var q = 0; q < gs.length; q++) {
+          var key = pkey(j, gs[q]);
+          if (!raw[key] && !loading[key]) { next = [j, gs[q]]; break; }
+        }
+      }
+      if (!next) return;
+      preload.active++;
+      loadRaw(next[0], next[1]).then(done, done);
+    }
+    function done() { preload.active--; pumpPreload(); }
+  }
+
+  // ------------------------------------------------------------------ color scales
+  function hexRgb(h) { h = h.replace("#", ""); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+  var LITTLE = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+  function pack(c) { if (!c) return 0; return LITTLE ? ((255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0]) >>> 0 : ((c[0] << 24) | (c[1] << 16) | (c[2] << 8) | 255) >>> 0; }
+  // band = number of edges <= value (cansac_gust.gust_fill / wind_rh band rule). The LUT is indexed
+  // by the STORED value in quarter steps (stored x 4), so the field fill can index it directly.
+  var SC = {};
+  FIELDS.forEach(function (f) {
+    var s = D.scales[f], rgb = s.colors.map(function (h) { return h ? hexRgb(h) : null; });
+    var lut = new Uint32Array(1024), band = new Uint8Array(1024);
+    for (var q = 0; q < 1024; q++) {
+      var v = toDisplay(f, q / 4), b = 0;
+      while (b < s.edges.length && s.edges[b] <= v) b++;
+      band[q] = b; lut[q] = pack(rgb[b]);
+    }
+    SC[f] = { s: s, rgb: rgb, lut: lut, band: band };
+  });
+  function bandOf(f, v) { var e = SC[f].s.edges, b = 0; while (b < e.length && e[b] <= v) b++; return b; }
+  function colorOf(f, v) { return SC[f].rgb[bandOf(f, v)]; }
+  var GRAY = pack(hexRgb(MP.no_data_color || "#bbbbbb"));
+
+  // ------------------------------------------------------------------ state
+  var els = {
+    canvas: $("mapCanvas"), overlay: $("overlay"), viewport: $("viewport"), dayPills: $("dayPills"),
+    scrubber: $("scrubber"), btnPlay: $("btnPlay"), btnReverse: $("btnReverse"), speedSlider: $("speedSlider"),
+    stepSelect: $("stepSelect"), arrowButtons: $("arrowButtons"), cursorLine: $("cursorLine"), detail: $("detail"),
+    detailTitle: $("detailTitle"), detailSub: $("detailSub"), detailTable: $("detailTable"), areaSelect: $("areaSelect"),
+    toast: $("toast"), btnCsv: $("btnCsv")
+  };
+  var state = {
+    field: "wind", frame: 0, cur: null, area: "ca", arrows: "wind", legend: "fit", viUnit: "kt", bands: null, step: 1, playing: false, reverse: false,
+    timer: null, busy: false, sel: null, layout: null, logos: {}
+  };
+
+  // ------------------------------------------------------------------ dates / labels
+  var DATES = [], dateFrames = {};
+  FR.forEach(function (fr, i) {
+    if (!dateFrames[fr.date]) { dateFrames[fr.date] = []; DATES.push(fr.date); }
+    dateFrames[fr.date].push(i);
+  });
+  function localHour(fr) { return Number(fr.valid.slice(11, 13)); }
+  function fmtDate(iso, opts) {
+    var d = new Date(iso + "T00:00:00");
+    return isNaN(d) ? iso : d.toLocaleDateString("en-US", opts || { weekday: "short", month: "short", day: "numeric" });
+  }
+  function validText(fr, long) {
+    return fmtDate(fr.date, long ? { weekday: "long", month: "long", day: "numeric", year: "numeric" } : { weekday: "short", month: "short", day: "numeric" }) +
+      " " + fr.valid.slice(11, 16) + " " + fr.tz;
+  }
+  function srcText(fr) { return D.source_labels[fr.source] || fr.source; }
+  function compass(deg) {
+    return ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"][Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+  }
+
+  // ------------------------------------------------------------------ layout (render_day / rx_custom_viewer)
+  var REGIONS = [{ key: "ca", label: "California", view: D.view }].concat(B.regions || []);
+  var X0, X1, Y0, Y1;
+  function regionOf(key) {
+    for (var i = 0; i < REGIONS.length; i++) if (REGIONS[i].key === key) return REGIONS[i];
+    return REGIONS[0];
+  }
+  function setArea(key, quiet) {
+    var r = regionOf(key);
+    state.area = r.key;
+    X0 = r.view.xlim[0]; X1 = r.view.xlim[1]; Y0 = r.view.ylim[0]; Y1 = r.view.ylim[1];
+    els.areaSelect.value = r.key;
+    if (!quiet) { render(); updateHash(); }
+  }
+  function computeLayout() {
+    var latAspect = 1 / Math.cos(((Y0 + Y1) / 2) * Math.PI / 180);
+    var hPerW = (Y1 - Y0) * latAspect / (X1 - X0);
+    var maxW = PAGE_W - MAP_LEFT - CBAR_GAP - CBAR_W - CBAR_LABEL - CBAR_RIGHT;
+    var reservedBottom = FOOTER + MAP_MARGIN + SUBTITLE + MAP_MARGIN;
+    var maxH = PAGE_H - HEADER - MAP_MARGIN - reservedBottom;
+    var mw, mh;
+    if (maxW * hPerW <= maxH) { mw = maxW; mh = maxW * hPerW; } else { mh = maxH; mw = maxH / hPerW; }
+    var left = MAP_LEFT + (maxW - mw) / 2, bottom = reservedBottom + (maxH - mh) / 2;
+    return { left: left, top: PAGE_H - bottom - mh, w: mw, h: mh, bottom: bottom };
+  }
+  function sizeCanvases() {
+    var rect = els.viewport.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    [els.canvas, els.overlay].forEach(function (cv) {
+      cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.width * PAGE_H / PAGE_W * dpr);
+    });
+  }
+  function makeProj(s, L) {
+    return {
+      x: function (lon) { return (L.left + (lon - X0) / (X1 - X0) * L.w) * s; },
+      y: function (lat) { return (L.top + (Y1 - lat) / (Y1 - Y0) * L.h) * s; }
+    };
+  }
+
+  // ------------------------------------------------------------------ drawing
+  function tracePath(ctx, P, rings) {
+    ctx.beginPath();
+    rings.forEach(function (r) {
+      ctx.moveTo(P.x(r[0]), P.y(r[1]));
+      for (var i = 2; i < r.length; i += 2) ctx.lineTo(P.x(r[i]), P.y(r[i + 1]));
+      ctx.closePath();
+    });
+  }
+  function pt(s, points) { return points / 72 * s; }
+  function font(s, size, bold) { return (bold ? "bold " : "") + pt(s, size).toFixed(2) + "px \"DejaVu Sans\", \"Segoe UI\", Arial, sans-serif"; }
+  function stroke(ctx, P, rings, color, lwPt, s, dash) {
+    tracePath(ctx, P, rings);
+    ctx.strokeStyle = color; ctx.lineWidth = pt(s, lwPt);
+    ctx.setLineDash(dash ? dash.map(function (x) { return pt(s, x * lwPt); }) : []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Field fill: bilinear between the four surrounding cell centers when all four have data, else
+  // the nearest cell; banded through the scale's LUT. The view is plate carree, so a pixel row maps
+  // to one grid row and a pixel column to one grid column.
+  function drawField(ctx, s, L, f) {
+    var g = f.g, part = f.parts[PLANE[state.field].group], plane = part.off[state.field], v = part.v, lut = SC[state.field].lut, cellOf = g.cellOf;
+    var bandAt = SC[state.field].band, bmin = 99, bmax = -1;  // bands actually drawn, for the fitted color bar
+    var px0 = Math.floor(L.left * s), py0 = Math.floor(L.top * s);
+    var pw = Math.ceil(L.w * s) + 1, ph = Math.ceil(L.h * s) + 1;
+    var img = ctx.createImageData(pw, ph), out = new Uint32Array(img.data.buffer);
+    var gxs = new Float64Array(pw);
+    for (var px = 0; px < pw; px++) gxs[px] = (X0 + ((px0 + px + 0.5) / s - L.left) / L.w * (X1 - X0) - g.lon0) / g.cell;
+    var nx = g.nx, ny = g.ny;
+    for (var py = 0; py < ph; py++) {
+      var gy = (Y1 - ((py0 + py + 0.5) / s - L.top) / L.h * (Y1 - Y0) - g.lat0) / g.cell;
+      var j = Math.floor(gy), fy = gy - j, jn = Math.round(gy);
+      if (jn < 0 || jn >= ny) continue;
+      var row = py * pw;
+      for (px = 0; px < pw; px++) {
+        var gx = gxs[px], i = Math.floor(gx), fx = gx - i, inr = Math.round(gx);
+        if (inr < 0 || inr >= nx) continue;
+        var cn = cellOf[jn * nx + inr];
+        if (cn < 0) continue;
+        var val = -1;
+        if (j >= 0 && j < ny - 1 && i >= 0 && i < nx - 1) {
+          var ka = j * nx + i, ca = cellOf[ka], cb = cellOf[ka + 1], cc = cellOf[ka + nx], cd = cellOf[ka + nx + 1];
+          if (ca >= 0 && cb >= 0 && cc >= 0 && cd >= 0) {
+            var a = v[plane + ca], b = v[plane + cb], c = v[plane + cc], d = v[plane + cd];
+            if (a !== MISSING && b !== MISSING && c !== MISSING && d !== MISSING)
+              val = a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
+          }
+        }
+        if (val < 0) {
+          var vn = v[plane + cn];
+          if (vn === MISSING) { out[row + px] = GRAY; continue; }
+          val = vn;
+        }
+        var qi = Math.min(1023, Math.round(val * 4)), bb = bandAt[qi];
+        if (bb < bmin) bmin = bb;
+        if (bb > bmax) bmax = bb;
+        out[row + px] = lut[qi];
+      }
+    }
+    state.bands = bmax < 0 ? null : [bmin, bmax];
+    var tmp = document.createElement("canvas"); tmp.width = pw; tmp.height = ph;
+    tmp.getContext("2d").putImageData(img, 0, 0);
+    ctx.drawImage(tmp, px0, py0);
+  }
+
+  // Wind arrows on a fixed page-inch lattice: each takes the nearest cell's speed and direction
+  // for the chosen overlay (ARROWS), points the way the wind blows (direction + 180), and is
+  // scaled to ARROW_MAX_IN at that overlay's full-length speed.
+  // True when the field's color at cell c is dark (luminance under ~25%).
+  function darkUnder(f, c) {
+    var v = value(f, state.field, c), col = v == null ? null : colorOf(state.field, v);
+    return !!col && 0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2] < 64;
+  }
+  function drawArrows(ctx, s, L, P, f) {
+    var A = ARROWS[state.arrows];
+    if (!A) return;
+    // Arrows sit on fixed geographic points -- whole multiples of a spacing that comes out near
+    // ARROW_SPACING_IN on the page, snapped to the 1 km grid -- so they stay on the same terrain from
+    // frame to frame. Each takes the speed and direction of the frame-grid cell under it (1 km for
+    // hours 0-72): the wind at that spot, valley- and ridge-channeled, not an area average.
+    var g = f.g, maxLen = ARROW_MAX_IN * s, cell = GRIDS.fine.cell, P = makeProj(s, L);
+    var dLon = Math.max(cell, Math.round(ARROW_SPACING_IN / L.w * (X1 - X0) / cell) * cell);
+    var dLat = Math.max(cell, Math.round(ARROW_SPACING_IN / L.h * (Y1 - Y0) / cell) * cell);
+    // Drawn like CANSAC's own vectors (wind_rh_images.draw_arrows, 2026-10-21 analyst request): a
+    // hairline shaft with no outline, a small narrow filled head (length 0.4 x the arrow up to
+    // ~4 pt, half-width 0.4 x the head), and a dot where the wind is under 1 mph.
+    var segs = [], dots = [];
+    for (var lat = Math.ceil(Y0 / dLat) * dLat; lat < Y1; lat += dLat) {
+      var y = P.y(lat);
+      for (var lon = Math.ceil(X0 / dLon) * dLon; lon < X1; lon += dLon) {
+        var x = P.x(lon), cg = cellNear(g, lat, lon);
+        var w = value(f, A.speed, cg), dfrom = value(f, A.dir, cg);
+        if (w == null || dfrom == null) continue;
+        if (w < 1) { dots.push([x, y]); continue; }
+        var to = (dfrom + 180) * Math.PI / 180, len = (0.35 + 0.65 * Math.min(1, w / A.full)) * maxLen;  // light winds still read
+        // Screen east is +x, north is -y. computeLayout stretches latitude by 1/cos(mid-lat), so
+        // the page is locally conformal and a true bearing draws at its true angle.
+        var dx = Math.sin(to), dy = -Math.cos(to);
+        segs.push([x - dx * len / 2, y - dy * len / 2, x + dx * len / 2, y + dy * len / 2, dx, dy, len, darkUnder(f, cg)]);
+      }
+    }
+    // An arrow over a dark map color (the darkest VI, gust and precip bands) is drawn
+    // white instead of its overlay color, so it never vanishes into the fill.
+    ctx.save();
+    ctx.lineCap = "butt"; ctx.lineWidth = pt(s, 0.7);
+    var maxHead = pt(s, 4);
+    [[false, A.color], [true, "#ffffff"]].forEach(function (pass) {
+      var mine = segs.filter(function (q) { return q[7] === pass[0]; });
+      if (!mine.length) return;
+      ctx.strokeStyle = pass[1]; ctx.fillStyle = pass[1];
+      ctx.beginPath();
+      mine.forEach(function (q) { ctx.moveTo(q[0], q[1]); ctx.lineTo(q[2], q[3]); });
+      ctx.stroke();
+      ctx.beginPath();
+      mine.forEach(function (q) {
+        var head = Math.min(maxHead, 0.4 * q[6]), hw = head * 0.4;
+        var bx = q[2] - q[4] * head, by = q[3] - q[5] * head;
+        ctx.moveTo(q[2], q[3]); ctx.lineTo(bx - q[5] * hw, by + q[4] * hw); ctx.lineTo(bx + q[5] * hw, by - q[4] * hw);
+        ctx.closePath();
+      });
+      ctx.fill();
+    });
+    ctx.fillStyle = A.color;
+    var r = pt(s, 0.7);
+    ctx.beginPath();
+    dots.forEach(function (d) { ctx.moveTo(d[0] + r, d[1]); ctx.arc(d[0], d[1], r, 0, 2 * Math.PI); });
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCities(ctx, s, P) {
+    if (MP.show_cities === false) return;
+    var minPop = Number(MP.city_min_population || 0);
+    var cand = B.cities.filter(function (c) {
+      return c.lon > X0 && c.lon < X1 && c.lat > Y0 && c.lat < Y1 && (c.state === "California" || c.population >= minPop);
+    }).sort(function (a, b) { return b.population - a.population; });
+    var minSep = 24 / 150 * s, placed = [];
+    ctx.font = font(s, 5.5); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+    cand.forEach(function (c) {
+      var x = P.x(c.lon), y = P.y(c.lat);
+      for (var i = 0; i < placed.length; i++) {
+        var dx = x - placed[i][0], dy = y - placed[i][1];
+        if (dx * dx + dy * dy < minSep * minSep) return;
+      }
+      placed.push([x, y]);
+      ctx.fillStyle = "#1a1a1a";
+      ctx.beginPath(); ctx.arc(x, y, pt(s, 1.1), 0, 2 * Math.PI); ctx.fill();
+      var label = "  " + c.name;
+      if (MP.city_label_halo !== false) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = pt(s, 2); ctx.strokeText(label, x, y); }
+      ctx.fillText(label, x, y);
+    });
+  }
+
+  // Discrete bar, every band the same height, lowest at the bottom (CANSAC's bars).
+  // Discrete bar, every band the same height, lowest at the bottom (CANSAC's bars). "Fit to view"
+  // (the default) shows only bands k0..k1 that the map view actually has this hour, like CANSAC's
+  // own adaptive bars (wind_rh_images.draw_colorbar); a single band gets a neighbor so the bar has
+  // a boundary to label. "Full scale" shows every band.
+  function drawColorbar(ctx, s, L) {
+    var sc = SC[state.field], edges = sc.s.edges, nAll = sc.rgb.length, k0 = 0, k1 = nAll - 1;
+    if (state.legend === "fit" && state.bands) {
+      k0 = state.bands[0]; k1 = state.bands[1];
+      if (k0 === k1) { if (k1 < nAll - 1) k1++; else k0--; }
+    }
+    var nb = k1 - k0 + 1;
+    var cl = L.left + L.w + CBAR_GAP, inset = L.h * CBAR_VINSET;
+    var top = (L.top + inset) * s, h = (L.h - 2 * inset) * s, x = cl * s, w = CBAR_W * s, bh = h / nb;
+    for (var b = k0; b <= k1; b++) {
+      var c = sc.rgb[b];
+      ctx.fillStyle = c ? "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")" : (MP.land_color || "#f1eee8");
+      ctx.fillRect(x, top + h - (b - k0 + 1) * bh, w, bh + 0.5);
+    }
+    ctx.strokeStyle = "#000"; ctx.lineWidth = pt(s, 0.5); ctx.strokeRect(x, top, w, h);
+    ctx.fillStyle = "#000"; ctx.font = font(s, 7); ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    var big = state.field === "mixht" || state.field === "vi", roomy = bh >= pt(s, 9);
+    edges.forEach(function (e, k) {
+      if (k < k0 || k >= k1) return;                    // boundary between band k and k+1, both shown
+      var pr = isPrecip(state.field);
+      var show = roomy || pr || (state.field === "rh" ? e % 10 === 0 : (big || (e <= 40 ? e % 4 === 0 : e % 10 === 0)));
+      if (!show) return;
+      var y = top + h - (k - k0 + 1) * bh;
+      if (state.field === "vi") e = Math.round(viShown(e) / 1000) * 1000;
+      var txt = pr ? (e < 1 ? e.toFixed(2).replace(/^0/, "") : String(e)) : big ? (e >= 1000 ? (e / 1000) + "k" : String(e)) : String(e);
+      ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w + pt(s, 3), y); ctx.stroke();
+      ctx.fillText(txt, x + w + pt(s, 4.5), y);
+    });
+    if (state.field === "vi") {
+      // NWCG rating names, each written up the bands it spans, with a heavier line at each rating
+      // break (white text on the dark Excellent shades, black elsewhere).
+      var kb = k0;
+      while (kb <= k1) {
+        var cat = VI_BAND_CAT[kb], kEnd = kb;
+        while (kEnd + 1 <= k1 && VI_BAND_CAT[kEnd + 1] === cat) kEnd++;
+        var mid = Math.floor((kb + kEnd) / 2), cc = sc.rgb[mid], dark = 0.299 * cc[0] + 0.587 * cc[1] + 0.114 * cc[2] < 140;
+        var span = (kEnd - kb + 1) * bh, name = VI_SC.categories[cat].name;
+        ctx.save();
+        ctx.translate(x + w / 2, top + h - (kb - k0) * bh - span / 2); ctx.rotate(-Math.PI / 2);
+        fitText(ctx, name, span - pt(s, 2), 6.5, 3.5, s, true);
+        ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = dark ? "#ffffff" : "#000000";
+        ctx.fillText(name, 0, 0);
+        ctx.restore();
+        if (kb > k0) {
+          var yb = top + h - (kb - k0) * bh;
+          ctx.save(); ctx.strokeStyle = "#000"; ctx.lineWidth = pt(s, 1.2);
+          ctx.beginPath(); ctx.moveTo(x, yb); ctx.lineTo(x + w + pt(s, 3), yb); ctx.stroke(); ctx.restore();
+        }
+        kb = kEnd + 1;
+      }
+      drawWorsnopMarks(ctx, s, x, top, h, bh, edges, k0, k1);
+    }
+    ctx.save();
+    ctx.translate(x + w + pt(s, 21), top + h / 2); ctx.rotate(-Math.PI / 2);
+    ctx.font = font(s, 8); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(state.field === "vi" ? "Ventilation index (" + viUnitText() + "), NWCG smoke condition" : sc.s.label, 0, 0);
+    ctx.restore();
+    ctx.fillStyle = "#555555"; ctx.font = font(s, 6.5); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText("gray = no data", x + w / 2, top + h + pt(s, 3));
+  }
+
+  // Worsnop et al. 2026 burn-day daylight-max VI for the frame's month: a bar each for pile (P) and
+  // broadcast (B) burns, 5th-95th percentile, with a tick at the median, drawn left of the color bar.
+  // Bands are equal-height, so a value is placed linearly within its band.
+  // With a fitted bar, a mark past either end is clipped to it.
+  function drawWorsnopMarks(ctx, s, x, top, h, bh, edges, k0, k1) {
+    var month = String(Number(FR[state.frame].date.slice(5, 7))), ref = (D.worsnop_vi || {})[month];
+    if (!ref) return;
+    function yOf(v) {
+      var b = 0;
+      while (b < edges.length && edges[b] <= v) b++;
+      var lo = b === 0 ? 0 : edges[b - 1], hi = b < edges.length ? edges[b] : lo * 2;
+      var pos = b - k0 + Math.min(1, (v - lo) / (hi - lo));
+      return top + h - Math.max(0, Math.min(k1 - k0 + 1, pos)) * bh;
+    }
+    ctx.save();
+    ctx.strokeStyle = "#222"; ctx.fillStyle = "#222"; ctx.lineWidth = pt(s, 1.2);
+    ctx.font = font(s, 5.5, true); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    [["pile", "P", pt(s, 11)], ["broadcast", "B", pt(s, 5)]].forEach(function (r) {
+      var q = ref[r[0]], xx = x - r[2], y5 = yOf(q[0]), y95 = yOf(q[2]), y50 = yOf(q[1]);
+      ctx.beginPath(); ctx.moveTo(xx, y5); ctx.lineTo(xx, y95); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xx - pt(s, 2), y50); ctx.lineTo(xx + pt(s, 2), y50); ctx.stroke();
+      ctx.fillText(r[1], xx, y95 - pt(s, 1));
+    });
+    ctx.save();
+    ctx.translate(x - pt(s, 17), top + h / 2); ctx.rotate(-Math.PI / 2);
+    ctx.font = font(s, 5.5); ctx.textBaseline = "middle"; ctx.fillStyle = "#444";
+    ctx.fillText("Burn days, " + fmtDate(FR[state.frame].date, { month: "short" }) + " (Worsnop et al. 2026): 5th–95th pct, median", 0, 0);
+    ctx.restore();
+    ctx.restore();
+  }
+
+  function fitText(ctx, text, maxW, size, floor, s, bold) {
+    while (size > floor) { ctx.font = font(s, size, bold); if (ctx.measureText(text).width <= maxW) break; size -= 0.5; }
+    ctx.font = font(s, size, bold);
+  }
+  function drawHeaderFooter(ctx, s, W, H, withLogos) {
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, HEADER * s); ctx.fillRect(0, H - FOOTER * s, W, FOOTER * s);
+    var lh = (HEADER - 2 * BAR_PAD) * s, leftRes = 0, rightRes = 0;
+    var nops = withLogos && state.logos.nops, ps = withLogos && state.logos.ps;
+    if (nops) { var lw = lh * nops.naturalWidth / nops.naturalHeight; ctx.drawImage(nops, BAR_PAD * s, BAR_PAD * s, lw, lh); leftRes = lw + 0.15 * s; }
+    if (ps) { var rw = lh * ps.naturalWidth / ps.naturalHeight; ctx.drawImage(ps, W - BAR_PAD * s - rw, BAR_PAD * s, rw, lh); rightRes = rw + 0.15 * s; }
+    ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
+    ctx.font = font(s, 8.5); ctx.textAlign = "right";
+    var issuedX = W - 0.012 * W - rightRes;
+    ctx.fillText(D.issued_text, issuedX, HEADER * s / 2);
+    // "CANSAC WRF" in bold accent orange ahead of the title, so the data's source is the first
+    // thing on the page (analyst request 2026-10-21); both shrink together to fit.
+    var issuedW = ctx.measureText(D.issued_text).width, titleX = 0.012 * W + leftRes;
+    var brand = "CANSAC WRF", gap = "  ", room = issuedX - issuedW - 0.2 * s - titleX, size = 11.5;
+    while (size > 6.5) {
+      ctx.font = font(s, size, true);
+      if (ctx.measureText(brand + gap + D.title).width <= room) break;
+      size -= 0.5;
+    }
+    ctx.font = font(s, size, true); ctx.textAlign = "left";
+    ctx.fillStyle = "#ff8a4c"; ctx.fillText(brand, titleX, HEADER * s / 2);
+    var bw = ctx.measureText(brand + gap).width;
+    ctx.fillStyle = "#fff"; ctx.fillText(D.title, titleX + bw, HEADER * s / 2);
+    var footer = "Data: CANSAC WRF (DRI) 1 km to hour " + D.hires_last_hour + ", 3 km after    Boundaries: Natural Earth    Viewer: " +
+      (location.hostname || "local file");
+    fitText(ctx, footer, W - 0.3 * s, 6.5, 4.5, s, false);
+    ctx.textAlign = "center"; ctx.fillText(footer, W / 2, H - FOOTER * s / 2);
+  }
+
+  // What a precipitation total covers, for the subtitle and the side panel.
+  function precipNote(fr) {
+    if (state.field === "pday") {
+      var d = D.precip_days[fr.date];
+      return " for " + fmtDate(fr.date, { weekday: "short", month: "short", day: "numeric" }) +
+        (d && d.partial ? " (partial: run hours " + d.from_hour + "–" + d.to_hour + ")" : " (midnight to midnight)");
+    }
+    if (state.field === "ptot") return " through hour " + fr.hour;
+    return "";
+  }
+
+  function drawPage(ctx, W, H, withLogos) {
+    var f = state.cur; if (!f) return;
+    var s = W / PAGE_W, L = computeLayout(), P = makeProj(s, L), fr = FR[f.i];
+    state.layout = { s: s, L: L };
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(L.left * s, L.top * s, L.w * s, L.h * s); ctx.clip();
+    ctx.fillStyle = MP.water_color || "#ffffff"; ctx.fillRect(L.left * s, L.top * s, L.w * s, L.h * s);
+    tracePath(ctx, P, B.land); ctx.fillStyle = MP.land_color || "#f1eee8"; ctx.fill("evenodd");
+    drawField(ctx, s, L, f);
+    if (MP.show_counties !== false) stroke(ctx, P, B.counties, "rgba(60,60,60,0.45)", 0.3, s);
+    B.countries.forEach(function (c) { stroke(ctx, P, c.rings, "#555555", 0.8, s); });
+    B.states.forEach(function (st) { if (st.postal !== "CA") stroke(ctx, P, st.rings, "#6a6a6a", 0.5, s); });
+    stroke(ctx, P, B.domain, "#666666", 0.6, s, [3.7, 1.6]);
+    stroke(ctx, P, B.california, "#111111", 1.5, s);
+    var area = regionOf(state.area);
+    if (area.rings) stroke(ctx, P, area.rings, "#8b1a1a", 1.6, s);
+    drawArrows(ctx, s, L, P, f);
+    if (MP.watermark && MP.watermark_text) {
+      ctx.save();
+      ctx.translate((L.left + L.w / 2) * s, (L.top + L.h / 2) * s); ctx.rotate(-Math.PI / 6);
+      ctx.font = font(s, 42, true); ctx.fillStyle = "rgba(0,0,0,0.10)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(MP.watermark_text, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+
+    ctx.font = font(s, 8, true); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(51,51,51,0.75)";
+    B.states.forEach(function (st) {
+      if (st.label_lon > X0 && st.label_lon < X1 && st.label_lat > Y0 && st.label_lat < Y1) ctx.fillText(st.postal, P.x(st.label_lon), P.y(st.label_lat));
+    });
+    B.countries.forEach(function (c) { if (c.name === "Mexico") ctx.fillText("MEXICO", P.x(c.label_lon), P.y(c.label_lat)); });
+    drawCities(ctx, s, P);
+    drawColorbar(ctx, s, L);
+
+    var sub = SC[state.field].s.label.replace(/ \(.*\)$/, "") + precipNote(fr) + "  ·  Hour " + fr.hour + "  ·  Valid " +
+      validText(fr, true) + "  ·  " + srcText(fr);
+    ctx.fillStyle = "#555555"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    fitText(ctx, sub, W - 0.3 * s, 8.5, 5, s, false);
+    ctx.fillText(sub, W / 2, H - (FOOTER + MAP_MARGIN + SUBTITLE / 2) * s);
+    drawHeaderFooter(ctx, s, W, H, withLogos);
+  }
+
+  function render() {
+    if (!state.cur) return;
+    drawPage(els.canvas.getContext("2d"), els.canvas.width, els.canvas.height, true);
+    drawOverlay();
+    updateReadouts();
+    renderDetail();
+  }
+
+  // ------------------------------------------------------------------ readouts, pills
+  function llText(ll) { return ll[0].toFixed(2) + "°N " + Math.abs(ll[1]).toFixed(2) + "°W"; }
+  function cellLL(g, c) {
+    // inverse of cellOf for one cell: scan is too slow per call, so keep a lazily built table
+    if (!g.ll) {
+      g.ll = new Int32Array(g.n);
+      for (var k = 0; k < g.cellOf.length; k++) if (g.cellOf[k] >= 0) g.ll[g.cellOf[k]] = k;
+    }
+    var k2 = g.ll[c];
+    return [g.lat0 + Math.floor(k2 / g.nx) * g.cell, g.lon0 + (k2 % g.nx) * g.cell];
+  }
+  function updateReadouts() {
+    var fr = FR[state.frame], st = state.cur.stats, g = state.cur.g;
+    $("frameReadout").textContent = validText(fr, false) + " • hour " + fr.hour + " • " + (state.frame + 1) + "/" + NF;
+    $("sourceReadout").textContent = srcText(fr) + " (" + g.cell + "° grid)";
+    var fs = st[state.field], sc = D.scales[state.field];
+    function ext(v, at) {
+      var d = toDisplay(state.field, v);
+      return fmtVal(state.field, d) + " " + (state.field === "vi" ? viUnitText() + ", " + viCategory(d) : sc.unit) +
+        " (" + llText(cellLL(g, at)) + ")";
+    }
+    $("statsText").textContent = fs && fs.maxAt >= 0 ? "This hour, " + sc.short + ": min " + ext(fs.min, fs.minAt) +
+      " • max " + ext(fs.max, fs.maxAt) : "This hour: no data";
+    Array.prototype.forEach.call(els.arrowButtons.children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.arrows === state.arrows)); });
+    Array.prototype.forEach.call($("legendButtons").children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.legend === state.legend)); });
+    els.scrubber.value = state.frame;
+    Array.prototype.forEach.call(els.dayPills.children, function (p) { p.setAttribute("aria-selected", String(p.dataset.date === fr.date)); });
+    Array.prototype.forEach.call($("fieldButtons").children, function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.field === state.field || (b.dataset.field === "precip" && isPrecip(state.field))));
+    });
+    $("precipModes").hidden = !isPrecip(state.field);
+    $("viUnits").hidden = state.field !== "vi";
+    Array.prototype.forEach.call($("viUnits").children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.vi === state.viUnit)); });
+    Array.prototype.forEach.call($("precipModes").children, function (b) { b.setAttribute("aria-pressed", String(b.dataset.field === state.field)); });
+  }
+  function buildDayPills() {
+    DATES.forEach(function (iso) {
+      var b = document.createElement("button"), fi = dateFrames[iso];
+      var srcs = {}; fi.forEach(function (i) { srcs[FR[i].source] = 1; });
+      b.className = "pill"; b.type = "button"; b.setAttribute("role", "tab"); b.dataset.date = iso;
+      b.textContent = fmtDate(iso, { weekday: "short", day: "numeric" });
+      b.title = fmtDate(iso, { weekday: "long", month: "long", day: "numeric" }) + " — " + Object.keys(srcs).map(function (k) { return D.source_labels[k]; }).join(" + ");
+      b.addEventListener("click", function () { stopPlayback(); setFrame(sameHourOn(iso)); });
+      els.dayPills.appendChild(b);
+    });
+    els.scrubber.max = NF - 1;
+    $("scrubFirst").textContent = "+" + FR[0].hour + " h";
+    $("scrubLast").textContent = "+" + FR[NF - 1].hour + " h";
+  }
+  // Frame on that date at the current local hour, or the nearest hour that date has.
+  function sameHourOn(iso) {
+    var want = localHour(FR[state.frame]), best = dateFrames[iso][0], bd = 99;
+    dateFrames[iso].forEach(function (i) { var d = Math.abs(localHour(FR[i]) - want); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+
+  var pending = null;
+  function setFrame(i) {
+    i = Math.max(0, Math.min(NF - 1, i));
+    state.frame = i;
+    pending = i;
+    return getFrame(i).then(function (f) {
+      if (pending !== i) return;          // a newer request won
+      state.cur = f; render(); updateHash(); pumpPreload();
+    }, function (e) { toast(e.message); });
+  }
+
+  // ------------------------------------------------------------------ point pick + hourly table
+  function lonLatAt(evt) {
+    if (!state.layout) return null;
+    var rect = els.overlay.getBoundingClientRect(), s = els.canvas.width / PAGE_W, L = state.layout.L;
+    var xin = (evt.clientX - rect.left) * (els.canvas.width / rect.width) / s;
+    var yin = (evt.clientY - rect.top) * (els.canvas.height / rect.height) / s;
+    if (xin < L.left || xin > L.left + L.w || yin < L.top || yin > L.top + L.h) return null;
+    return [Y1 - (yin - L.top) / L.h * (Y1 - Y0), X0 + (xin - L.left) / L.w * (X1 - X0)];
+  }
+  function pointText(f, ll) {
+    if (cellNear(f.g, ll[0], ll[1]) < 0) return null;
+    var p = pointVals(f, ll[0], ll[1]);
+    if (p.wind == null) return llText(ll) + " · no data";
+    return llText(ll) + " · wind " + (p.dir == null ? "" : compass(p.dir) + " ") + p.wind + " mph · gust " + p.gust +
+      " mph · RH " + p.rh + "% · mix ht " + fmtVal("mixht", p.mixht) + " ft · transport " +
+      (p.tdir == null ? "" : compass(p.tdir) + " ") + p.trans + " mph · VI " + fmtVal("vi", p.vi) + " " + viUnitText() + (p.vi == null ? "" : " (" + viCategory(p.vi) + ")");
+  }
+  function drawOverlay() {
+    var ctx = els.overlay.getContext("2d");
+    ctx.clearRect(0, 0, els.overlay.width, els.overlay.height);
+    if (!state.sel || !state.layout) return;
+    var s = state.layout.s, P = makeProj(s, state.layout.L);
+    var x = P.x(state.sel[1]), y = P.y(state.sel[0]), r = pt(s, 5);
+    ctx.lineWidth = pt(s, 1.6); ctx.strokeStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = pt(s, 0.9); ctx.strokeStyle = "#000000";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+  }
+  function swatch(field, v, text) {
+    if (v == null) return "<td>—</td>";
+    var c = colorOf(field, v);
+    if (!c) return "<td>" + (text == null ? v : text) + "</td>";
+    var lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    return "<td class=\"sw" + (lum < 120 ? " dark" : "") + "\" style=\"background:rgb(" + c.join(",") + ")\">" +
+      (text == null ? v : text) + "</td>";
+  }
+  // Worsnop et al. 2026's daily max-vi: the largest VI from 18 to 00 UTC (10 AM-4 PM PST).
+  function isDaylightVI(fr) { return fr.utc_hour >= 18 || fr.utc_hour === 0; }
+  var detailToken = 0;
+  function renderDetail() {
+    els.btnCsv.disabled = !state.sel;
+    if (!state.sel) { els.detail.hidden = true; return; }
+    var ll = state.sel, fr = FR[state.frame], idx = dateFrames[fr.date], token = ++detailToken;
+    els.detail.hidden = false;
+    els.detailTitle.textContent = llText(ll) + " — " + fmtDate(fr.date, { weekday: "long", month: "short", day: "numeric" });
+    Promise.all(idx.map(function (i) { return getFrame(i, GROUPS); })).then(function (fs) {
+      if (token !== detailToken) return;
+      var rows = { hour: [], wind: [], dir: [], gust: [], rh: [], mixht: [], trans: [], vi: [], precip: [] }, srcs = {};
+      var mx = { wind: null, gust: null, rh: null, vi: null, pday: null, ptot: null };
+      fs.forEach(function (f) {
+        var p = pointVals(f, ll[0], ll[1]), cur = f.i === state.frame ? " cur" : "";
+        var w = p.wind, gu = p.gust, rh = p.rh;
+        srcs[srcText(FR[f.i])] = 1;
+        rows.hour.push("<th scope=\"col\" class=\"" + cur + "\" data-i=\"" + f.i + "\">" + FR[f.i].valid.slice(11, 13) + "</th>");
+        rows.wind.push(swatch("wind", w));
+        rows.dir.push("<td>" + (p.dir == null || w == null ? "—" : compass(p.dir)) + "</td>");
+        rows.gust.push(swatch("gust", gu));
+        rows.rh.push(swatch("rh", rh));
+        rows.mixht.push(swatch("mixht", p.mixht, p.mixht == null ? null : (p.mixht / 1000).toFixed(1)));
+        rows.trans.push(swatch("trans", p.trans, p.trans == null ? null : p.trans + (p.tdir == null ? "" : " " + compass(p.tdir))));
+        rows.vi.push(swatch("vi", p.vi, p.vi == null ? null : p.vi === 0 ? "0" : Math.round(viShown(p.vi) / 1000) + "k"));
+        rows.precip.push(swatch("precip", p.precip, fmtVal("precip", p.precip)));
+        if (p.pday != null) mx.pday = p.pday;
+        if (f.i === state.frame) mx.ptot = p.ptot;
+        if (w != null) { mx.wind = Math.max(mx.wind || 0, w); mx.gust = Math.max(mx.gust || 0, gu); mx.rh = mx.rh == null ? rh : Math.min(mx.rh, rh); }
+        if (p.vi != null && isDaylightVI(FR[f.i])) mx.vi = Math.max(mx.vi || 0, p.vi);
+      });
+      els.detailSub.textContent = (mx.wind == null ? "no data here" : "day max wind " + mx.wind + " mph · max gust " + mx.gust +
+        " mph · min RH " + mx.rh + "%") +
+        (mx.vi == null ? "" : " · daylight max VI " + fmtVal("vi", mx.vi) + " " + viUnitText() + ", " + viCategory(mx.vi) + " (18–00 UTC, Worsnop et al.)") +
+        (mx.pday == null ? "" : " · day precip " + fmtVal("pday", mx.pday) + " in" +
+          (D.precip_days[fr.date] && D.precip_days[fr.date].partial ? " (partial day)" : "")) +
+        (mx.ptot == null ? "" : " · run total to hour " + fr.hour + ": " + fmtVal("ptot", mx.ptot) + " in") +
+        " · " + Object.keys(srcs).join(" + ") + " · click an hour to jump to it";
+      els.detailTable.innerHTML =
+        "<thead><tr><th scope=\"row\">Hour " + fr.tz + "</th>" + rows.hour.join("") + "</tr></thead><tbody>" +
+        "<tr><th scope=\"row\">Wind mph</th>" + rows.wind.join("") + "</tr>" +
+        "<tr><th scope=\"row\">Dir from</th>" + rows.dir.join("") + "</tr>" +
+        "<tr><th scope=\"row\">Gust mph</th>" + rows.gust.join("") + "</tr>" +
+        "<tr><th scope=\"row\">RH %</th>" + rows.rh.join("") + "</tr>" +
+        "<tr><th scope=\"row\" title=\"Mixing height (WRF PBL height), thousands of feet above ground\">Mix ht kft</th>" + rows.mixht.join("") + "</tr>" +
+        "<tr><th scope=\"row\" title=\"Transport wind: mean wind through the mixed layer, mph and direction from\">Transport mph</th>" + rows.trans.join("") + "</tr>" +
+        "<tr><th scope=\"row\" title=\"Ventilation index = transport wind x mixing height (ft), thousands; shaded by the map's colors (NWCG smoke-condition ratings)\">VI " + viUnitText() + "</th>" + rows.vi.join("") + "</tr>" +
+        "<tr><th scope=\"row\" title=\"Precipitation in the hour ending at that time, inches\">Precip in</th>" + rows.precip.join("") + "</tr></tbody>";
+    }, function (e) { toast(e.message); });
+  }
+  els.detailTable.addEventListener("click", function (e) {
+    var th = e.target.closest("th[data-i]");
+    if (th) { stopPlayback(); setFrame(Number(th.dataset.i)); }
+  });
+  els.overlay.addEventListener("mousemove", function (e) {
+    var ll = lonLatAt(e), t = ll && state.cur ? pointText(state.cur, ll) : null;
+    els.cursorLine.textContent = t ? t + " — click for the day's hours" : "Click the map for that point's hour-by-hour values.";
+  });
+  // Select a point (snapped to the nearest 1 km cell center); null clears. Keeps the lookup box
+  // showing the selected point.
+  function selectPoint(ll) {
+    if (ll) { var c = cellNear(GRIDS.fine, ll[0], ll[1]); state.sel = c >= 0 ? cellLL(GRIDS.fine, c) : ll; }
+    else state.sel = null;
+    var inp = $("llInput");
+    inp.value = state.sel ? state.sel[0].toFixed(3) + ", " + state.sel[1].toFixed(3) : "";
+    inp.setAttribute("aria-invalid", "false");
+    drawOverlay(); renderDetail(); updateHash();
+  }
+  els.overlay.addEventListener("click", function (e) {
+    var ll = lonLatAt(e);
+    selectPoint(ll && state.cur && cellNear(state.cur.g, ll[0], ll[1]) >= 0 ? ll : null);
+  });
+  // Typed lookup: "lat, lon" in decimal degrees, comma or space separated, optional N/S/E/W. A
+  // positive longitude without an E is taken as west (everything here is west of Greenwich).
+  function parseLatLon(text) {
+    var m = String(text).toUpperCase().match(/(-?\d+(?:\.\d+)?)\s*°?\s*([NS])?[\s,;\/]+(-?\d+(?:\.\d+)?)\s*°?\s*([EW])?/);
+    if (!m) return null;
+    var lat = Number(m[1]) * (m[2] === "S" ? -1 : 1), lon = Number(m[3]);
+    if (m[4] === "W" || (m[4] !== "E" && lon > 0)) lon = -Math.abs(lon);
+    return isFinite(lat) && isFinite(lon) ? [lat, lon] : null;
+  }
+  function lookupLatLon() {
+    var inp = $("llInput"), ll = parseLatLon(inp.value);
+    if (!ll) { inp.setAttribute("aria-invalid", "true"); toast("Type latitude, longitude, e.g. 39.75, -121.60"); return; }
+    if (cellNear(GRIDS.fine, ll[0], ll[1]) < 0 && cellNear(GRIDS.coarse, ll[0], ll[1]) < 0) {
+      inp.setAttribute("aria-invalid", "true");
+      toast(ll[0].toFixed(2) + ", " + ll[1].toFixed(2) + " is outside the forecast area (California + 1° of land).");
+      return;
+    }
+    if (ll[1] < X0 || ll[1] > X1 || ll[0] < Y0 || ll[0] > Y1) setArea("ca", true);   // make sure it's in view
+    selectPoint(ll);
+    render();
+    els.detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+  $("btnLL").addEventListener("click", lookupLatLon);
+  $("llInput").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); lookupLatLon(); } });
+
+  // ------------------------------------------------------------------ playback
+  function speedToMs(v) { var t = (v - 1) / 9; return Math.round(1500 - t * 1400); }
+  function stopPlayback() {
+    state.playing = false; els.btnPlay.dataset.playing = "false"; els.btnPlay.innerHTML = "&#9654;";
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  }
+  function stepFrame(dir) {
+    var j = state.frame + dir * state.step;
+    // Wrap to the other end, keeping the frame's place in the step cycle (the hour of day for 24 h).
+    if (j >= NF) j = state.frame % state.step;
+    if (j < 0) j = NF - 1 - ((NF - 1 - state.frame) % state.step);
+    return setFrame(j);
+  }
+  function startPlayback() {
+    state.playing = true; els.btnPlay.dataset.playing = "true"; els.btnPlay.innerHTML = "&#10074;&#10074;";
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(function () {
+      if (state.busy) return;                            // previous frame still loading: hold
+      state.busy = true;
+      stepFrame(state.reverse ? -1 : 1).then(function () { state.busy = false; }, function () { state.busy = false; });
+    }, speedToMs(Number(els.speedSlider.value)));
+  }
+  $("btnFirst").addEventListener("click", function () { stopPlayback(); setFrame(0); });
+  $("btnLast").addEventListener("click", function () { stopPlayback(); setFrame(NF - 1); });
+  $("btnPrev").addEventListener("click", function () { stopPlayback(); stepFrame(-1); });
+  $("btnNext").addEventListener("click", function () { stopPlayback(); stepFrame(1); });
+  els.btnPlay.addEventListener("click", function () { if (state.playing) stopPlayback(); else startPlayback(); });
+  els.btnReverse.addEventListener("click", function () {
+    state.reverse = !state.reverse; els.btnReverse.setAttribute("aria-pressed", String(state.reverse));
+    if (state.playing) startPlayback();
+  });
+  els.scrubber.addEventListener("input", function () { stopPlayback(); setFrame(Number(els.scrubber.value)); });
+  els.speedSlider.addEventListener("input", function () { if (state.playing) startPlayback(); });
+  els.stepSelect.addEventListener("change", function () { state.step = Number(els.stepSelect.value); updateHash(); });
+  function dayJump(dir) {
+    var k = DATES.indexOf(FR[state.frame].date) + dir;
+    if (k >= 0 && k < DATES.length) setFrame(sameHourOn(DATES[k]));
+  }
+  function setField(f) {
+    if (FIELDS.indexOf(f) < 0) return;
+    if (isPrecip(f)) state.precipMode = f;
+    state.field = f; setFrame(state.frame); updateLoadText();
+  }
+  function setArrows(mode) { if (ARROW_MODES.indexOf(mode) < 0) return; state.arrows = mode; setFrame(state.frame); updateLoadText(); }
+  function cycleArrows() { setArrows(ARROW_MODES[(ARROW_MODES.indexOf(state.arrows) + 1) % ARROW_MODES.length]); }
+  // The PRECIP button returns to the last precipitation period picked (1 hour by default).
+  Array.prototype.forEach.call($("fieldButtons").children, function (b) {
+    b.addEventListener("click", function () { setField(b.dataset.field === "precip" ? state.precipMode || "precip" : b.dataset.field); });
+  });
+  Array.prototype.forEach.call($("precipModes").children, function (b) { b.addEventListener("click", function () { setField(b.dataset.field); }); });
+  Array.prototype.forEach.call($("viUnits").children, function (b) {
+    b.addEventListener("click", function () { state.viUnit = b.dataset.vi; render(); updateHash(); });
+  });
+  Array.prototype.forEach.call(els.arrowButtons.children, function (b) { b.addEventListener("click", function () { setArrows(b.dataset.arrows); }); });
+  Array.prototype.forEach.call($("legendButtons").children, function (b) {
+    b.addEventListener("click", function () { state.legend = b.dataset.legend; render(); updateHash(); });
+  });
+  document.addEventListener("keydown", function (e) {
+    var tag = e.target && e.target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === " ") { e.preventDefault(); if (state.playing) stopPlayback(); else startPlayback(); }
+    else if (e.key === "ArrowLeft") { stopPlayback(); stepFrame(-1); }
+    else if (e.key === "ArrowRight") { stopPlayback(); stepFrame(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); stopPlayback(); dayJump(-1); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); stopPlayback(); dayJump(1); }
+    else if (e.key === "Home") { stopPlayback(); setFrame(0); }
+    else if (e.key === "End") { stopPlayback(); setFrame(NF - 1); }
+    else if (/^[1-6]$/.test(e.key)) setField(FIELDS[Number(e.key) - 1]);
+    else if (e.key === "7") setField(isPrecip(state.field) ? PRECIP_FIELDS[(PRECIP_FIELDS.indexOf(state.field) + 1) % 3] : state.precipMode || "precip");
+    else if (e.key === "a" || e.key === "A") cycleArrows();
+  });
+
+  // ------------------------------------------------------------------ share link (#hash)
+  function updateHash() {
+    var p = ["field=" + state.field, "hour=" + FR[state.frame].hour];
+    if (state.area !== "ca") p.push("area=" + state.area);
+    if (state.arrows !== "wind") p.push("arrows=" + state.arrows);
+    if (state.legend !== "fit") p.push("legend=" + state.legend);
+    if (state.viUnit !== "kt") p.push("vi=" + state.viUnit);
+    if (state.step !== 1) p.push("step=" + state.step);
+    if (state.sel) p.push("pt=" + state.sel[0].toFixed(3) + "," + state.sel[1].toFixed(3));
+    try { history.replaceState(null, "", "#" + p.join("&")); } catch (e) { /* file:// in some browsers */ }
+  }
+  function readHash() {
+    var out = {};
+    location.hash.replace(/^#/, "").split("&").forEach(function (kv) {
+      var i = kv.indexOf("="); if (i < 0) return;
+      out[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+    });
+    return out;
+  }
+
+  // ------------------------------------------------------------------ exports
+  function toast(msg) { els.toast.textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(function () { els.toast.textContent = ""; }, 3500); }
+  function download(blob, name) {
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  $("btnPng").addEventListener("click", function () {
+    var cv = document.createElement("canvas"); cv.width = Math.round(PAGE_W * 150); cv.height = Math.round(PAGE_H * 150);
+    var fr = FR[state.frame], name = "CA_FireWx_" + state.field.toUpperCase() + "_" + D.run + "_F" + ("00" + fr.hour).slice(-3) + ".png";
+    function go(withLogos) {
+      drawPage(cv.getContext("2d"), cv.width, cv.height, withLogos);
+      try { cv.toBlob(function (b) { download(b, name); }); }
+      catch (e) { if (withLogos) go(false); }  // file:// taints the canvas with local logo images
+      render();
+    }
+    go(true);
+  });
+  $("btnCsv").addEventListener("click", function () {
+    if (!state.sel) return;
+    var ll = state.sel, lines = ["# " + D.title + " | CANSAC WRF " + D.run + "Z | point " + ll[0].toFixed(3) + "," + ll[1].toFixed(3),
+      "valid_local,forecast_hour,source,wind_mph,wind_dir_from_deg,gust_mph,rh_pct,mixing_height_ft_agl,transport_wind_mph,transport_dir_from_deg,ventilation_index_kt_ft,smoke_condition_nwcg,precip_1h_in,precip_run_total_in,precip_day_total_in"];
+    toast("Collecting " + NF + " hours…");
+    var i = 0;
+    (function next() {
+      if (i >= NF) {
+        download(new Blob([lines.join("\n") + "\n"], { type: "text/csv" }), "fire_wx_" + D.run + "_" + ll[0].toFixed(3) + "_" + ll[1].toFixed(3) + ".csv");
+        toast("Point CSV saved.");
+        return;
+      }
+      getFrame(i, GROUPS).then(function (f) {
+        var p = pointVals(f, ll[0], ll[1]), fr = FR[i];
+        function e(v) { return v == null ? "" : v; }
+        lines.push([fr.valid, fr.hour, fr.source, e(p.wind), p.wind == null ? "" : e(p.dir), e(p.gust), e(p.rh),
+                    e(p.mixht), e(p.trans), p.trans == null ? "" : e(p.tdir), e(p.vi), p.vi == null ? "" : viCategory(p.vi),
+                    e(p.precip), e(p.ptot), e(p.pday)].join(","));
+        i++; next();
+      }, function (e) { toast(e.message); });
+    })();
+  });
+  $("btnShare").addEventListener("click", function () {
+    updateHash();
+    var url = location.href;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { toast("Link copied."); }, function () { window.prompt("Copy this link:", url); });
+    } else window.prompt("Copy this link:", url);
+  });
+
+  // ------------------------------------------------------------------ init
+  function loadLogo(key, src) {
+    var im = new Image();
+    im.onload = function () { state.logos[key] = im; render(); };
+    im.src = src;
+  }
+  $("issuedReadout").textContent = "CANSAC WRF " + D.issued_text;
+  $("sourceText").textContent = "Data: CANSAC WRF " + D.run + "Z. Hours 0–" + D.hires_last_hour + ": 1 km run on a " +
+    D.grids.fine.cell + "° grid (3 km fills the buffer past its edge); after that: 3 km run on a " + D.grids.coarse.cell +
+    "° grid. California + " + D.buffer_deg + "° land buffer (dashed). Boundaries: Natural Earth.";
+  REGIONS.forEach(function (r) { var o = document.createElement("option"); o.value = r.key; o.textContent = r.label; els.areaSelect.appendChild(o); });
+  els.areaSelect.addEventListener("change", function () { setArea(els.areaSelect.value); });
+  buildDayPills();
+
+  var H = readHash(), start = 0;
+  setArea(H.area || "ca", true);
+  if (FIELDS.indexOf(H.field) >= 0) state.field = H.field;
+  if (H.arrows === "0") state.arrows = "off";            // links from before the arrow picker
+  else if (ARROW_MODES.indexOf(H.arrows) >= 0) state.arrows = H.arrows;
+  if (H.step && ["1", "3", "24"].indexOf(H.step) >= 0) { state.step = Number(H.step); els.stepSelect.value = H.step; }
+  if (H.hour != null) FR.forEach(function (fr, i) { if (String(fr.hour) === H.hour) start = i; });
+  if (H.pt) { var pp = H.pt.split(",").map(Number); if (pp.length === 2 && pp.every(isFinite)) state.sel = pp; }
+  if (H.legend === "full") state.legend = "full";
+  if (H.vi === "mph") state.viUnit = "mph";
+  if (state.sel) $("llInput").value = state.sel[0].toFixed(3) + ", " + state.sel[1].toFixed(3);
+
+  decodeGrids().then(function () {
+    $("loadState").hidden = true;
+    $("console").hidden = false;
+    sizeCanvases();
+    return setFrame(start);
+  }).then(function () {
+    updateLoadText(); pumpPreload();
+    loadLogo("nops", "NOPS_logo.png");
+    loadLogo("ps", "PSLogo.png");
+  }, function (e) { $("loadState").hidden = false; $("loadState").textContent = "Could not start: " + e.message; });
+  var resizeTimer = null;
+  window.addEventListener("resize", function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(function () { sizeCanvases(); render(); }, 150); });
+})();
+</script>
+</body>
+</html>
